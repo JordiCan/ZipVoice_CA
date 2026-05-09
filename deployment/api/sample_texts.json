@@ -1,0 +1,20 @@
+[
+  {
+    "id": "greeting",
+    "label": "Short greeting",
+    "text": "Bon dia, com estàs?",
+    "prompt_text": "Això és una prova de veu."
+  },
+  {
+    "id": "broadcast",
+    "label": "Broadcast style",
+    "text": "Benvinguts a la demostració de síntesi de veu en català amb ZipVoice-CA.",
+    "prompt_text": "La veu de referència és clara, estable i natural."
+  },
+  {
+    "id": "assistant",
+    "label": "Assistant response",
+    "text": "La teva reserva ha estat confirmada i rebràs els detalls en pocs minuts.",
+    "prompt_text": "Parlo amb un to proper i tranquil."
+  }
+]

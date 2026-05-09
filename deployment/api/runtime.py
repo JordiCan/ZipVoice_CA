@@ -1,9 +1,13 @@
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Optional
 
+import boto3
+from botocore.client import BaseClient
+from botocore.exceptions import BotoCoreError, ClientError
 import safetensors.torch
 import torch
 from huggingface_hub import hf_hub_download
@@ -23,6 +27,150 @@ from zipvoice.utils.tensorrt import load_trt
 
 CATALAN_MODEL_REPO = "ebellob/ZipVoice-CA"
 logger = logging.getLogger(__name__)
+DEFAULT_SAMPLE_TEXTS = [
+    {
+        "id": "greeting",
+        "label": "Short greeting",
+        "text": "Bon dia, com estàs?",
+        "prompt_text": "Això és una prova de veu.",
+    },
+    {
+        "id": "news",
+        "label": "News style",
+        "text": "Avui el temps serà variable amb intervals de núvols i algunes clarianes.",
+        "prompt_text": "La locució és clara i natural per a una demostració.",
+    },
+    {
+        "id": "assistant",
+        "label": "Virtual assistant",
+        "text": "La teva comanda s'ha processat correctament i ja està en camí.",
+        "prompt_text": "Parlo amb un to proper i tranquil.",
+    },
+]
+DEFAULT_SAMPLE_TEXTS_FILE = Path(__file__).with_name("sample_texts.json")
+
+
+def get_s3_client() -> Optional[BaseClient]:
+    bucket = os.environ.get("ZIPVOICE_S3_BUCKET")
+    if not bucket:
+        return None
+
+    session_kwargs: dict[str, str] = {}
+    region = os.environ.get("ZIPVOICE_S3_REGION")
+    profile = os.environ.get("ZIPVOICE_AWS_PROFILE")
+    endpoint_url = os.environ.get("ZIPVOICE_S3_ENDPOINT_URL")
+    if region:
+        session_kwargs["region_name"] = region
+    if profile:
+        session_kwargs["profile_name"] = profile
+
+    session = boto3.session.Session(**session_kwargs)
+    return session.client("s3", endpoint_url=endpoint_url)
+
+
+def download_s3_file(
+    s3_client: BaseClient,
+    bucket: str,
+    key: str,
+    destination: Path,
+) -> bool:
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        s3_client.download_file(bucket, key, str(destination))
+        logger.info("Downloaded s3://%s/%s into %s", bucket, key, destination)
+        return True
+    except (BotoCoreError, ClientError):
+        logger.exception("Failed to download s3://%s/%s", bucket, key)
+        return False
+
+
+def list_s3_example_audio() -> list[dict[str, str]]:
+    bucket = os.environ.get("ZIPVOICE_S3_BUCKET")
+    prefix = os.environ.get("ZIPVOICE_S3_EXAMPLES_PREFIX", "").strip("/")
+    s3_client = get_s3_client()
+    if not bucket or not prefix or s3_client is None:
+        return []
+
+    normalized_prefix = f"{prefix}/"
+    try:
+        response = s3_client.list_objects_v2(Bucket=bucket, Prefix=normalized_prefix)
+    except (BotoCoreError, ClientError):
+        logger.exception("Failed to list example objects in s3://%s/%s", bucket, normalized_prefix)
+        return []
+
+    examples: list[dict[str, str]] = []
+    for item in response.get("Contents", []):
+        key = item.get("Key", "")
+        if not key or key.endswith("/"):
+            continue
+        try:
+            url = s3_client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": key},
+                ExpiresIn=int(os.environ.get("ZIPVOICE_S3_EXAMPLE_URL_TTL", "3600")),
+            )
+        except (BotoCoreError, ClientError):
+            logger.exception("Failed to generate presigned URL for s3://%s/%s", bucket, key)
+            continue
+
+        examples.append(
+            {
+                "name": Path(key).name,
+                "s3_key": key,
+                "url": url,
+            }
+        )
+
+    return examples
+
+
+def prepare_sample_texts_file(runtime_dir: Path) -> Optional[Path]:
+    path = os.environ.get("ZIPVOICE_SAMPLE_TEXTS_FILE")
+    if path:
+        sample_path = Path(path)
+        if sample_path.is_file():
+            return sample_path
+        logger.warning("Sample texts file %s does not exist", sample_path)
+
+    s3_bucket = os.environ.get("ZIPVOICE_S3_BUCKET")
+    s3_key = os.environ.get("ZIPVOICE_S3_SAMPLE_TEXTS_KEY")
+    s3_client = get_s3_client()
+    if s3_bucket and s3_key and s3_client is not None:
+        destination = runtime_dir / "sample_texts.json"
+        if destination.is_file() or download_s3_file(
+            s3_client=s3_client,
+            bucket=s3_bucket,
+            key=s3_key,
+            destination=destination,
+        ):
+            return destination
+
+    if DEFAULT_SAMPLE_TEXTS_FILE.is_file():
+        return DEFAULT_SAMPLE_TEXTS_FILE
+
+    return None
+
+
+def load_sample_texts(runtime_dir: Path) -> list[dict[str, str]]:
+    sample_file = prepare_sample_texts_file(runtime_dir)
+    if sample_file is None:
+        return DEFAULT_SAMPLE_TEXTS
+
+    path = str(sample_file)
+    if not path:
+        return DEFAULT_SAMPLE_TEXTS
+
+    sample_path = Path(path)
+    if not sample_path.is_file():
+        logger.warning("Sample texts file %s does not exist, using defaults", sample_path)
+        return DEFAULT_SAMPLE_TEXTS
+
+    with open(sample_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    if not isinstance(data, list):
+        raise ValueError("ZIPVOICE_SAMPLE_TEXTS_FILE must contain a JSON list")
+    return data
 
 
 def detect_device() -> torch.device:
@@ -35,16 +183,38 @@ def detect_device() -> torch.device:
 
 def ensure_model_artifacts(runtime_dir: Path) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    downloads = {
+    s3_bucket = os.environ.get("ZIPVOICE_S3_BUCKET")
+    s3_client = get_s3_client()
+    s3_downloads = {
+        "zipvoice_ca.pt": os.environ.get("ZIPVOICE_S3_CHECKPOINT_KEY"),
+        "model.json": os.environ.get("ZIPVOICE_S3_MODEL_CONFIG_KEY"),
+        "tokens.txt": os.environ.get("ZIPVOICE_S3_TOKENS_KEY"),
+    }
+    hf_downloads = {
         "zipvoice_ca.pt": (CATALAN_MODEL_REPO, "zipvoice_ca.pt"),
         "model.json": (HUGGINGFACE_REPO, "zipvoice/model.json"),
         "tokens.txt": (HUGGINGFACE_REPO, "zipvoice/tokens.txt"),
     }
 
-    for local_name, (repo_id, filename) in downloads.items():
+    for local_name, (repo_id, filename) in hf_downloads.items():
         destination = runtime_dir / local_name
         if destination.is_file():
             continue
+
+        s3_key = s3_downloads.get(local_name)
+        if s3_bucket and s3_key and s3_client is not None:
+            if download_s3_file(
+                s3_client=s3_client,
+                bucket=s3_bucket,
+                key=s3_key,
+                destination=destination,
+            ):
+                continue
+            logger.warning(
+                "Falling back to Hugging Face for %s after S3 download failure",
+                local_name,
+            )
+
         downloaded_path = Path(hf_hub_download(repo_id=repo_id, filename=filename))
         shutil.copy2(downloaded_path, destination)
         logger.info("Downloaded %s from %s into %s", filename, repo_id, destination)

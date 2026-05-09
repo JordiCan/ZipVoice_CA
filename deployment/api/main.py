@@ -10,11 +10,24 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from deployment.api.runtime import ensure_model_artifacts, load_inference_pipeline
+from deployment.api.runtime import (
+    ensure_model_artifacts,
+    list_s3_example_audio,
+    load_inference_pipeline,
+    load_sample_texts,
+)
 from zipvoice.bin.infer_zipvoice import generate_sentence
 
 RUNTIME_MODEL_DIR = Path(
     os.environ.get("ZIPVOICE_MODEL_DIR", "models/zipvoice_ca_runtime")
+)
+MAX_TEXT_CHARS = int(os.environ.get("ZIPVOICE_MAX_TEXT_CHARS", "300"))
+MAX_PROMPT_TEXT_CHARS = int(os.environ.get("ZIPVOICE_MAX_PROMPT_TEXT_CHARS", "300"))
+MAX_PROMPT_AUDIO_BYTES = int(
+    os.environ.get("ZIPVOICE_MAX_PROMPT_AUDIO_BYTES", str(10 * 1024 * 1024))
+)
+MAX_PROMPT_AUDIO_SECONDS = float(
+    os.environ.get("ZIPVOICE_MAX_PROMPT_AUDIO_SECONDS", "30")
 )
 DEFAULT_INFERENCE = {
     "model_name": "zipvoice",
@@ -49,6 +62,30 @@ def safe_unlink(path: str) -> None:
         logger.warning("Could not delete temporary file %s", path, exc_info=True)
 
 
+def validate_text_inputs(text: str, prompt_text: str) -> tuple[str, str]:
+    text = text.strip()
+    prompt_text = prompt_text.strip()
+
+    if not text:
+        raise HTTPException(status_code=400, detail="text must not be empty.")
+    if not prompt_text:
+        raise HTTPException(status_code=400, detail="prompt_text must not be empty.")
+    if len(text) > MAX_TEXT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"text must be at most {MAX_TEXT_CHARS} characters.",
+        )
+    if len(prompt_text) > MAX_PROMPT_TEXT_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"prompt_text must be at most {MAX_PROMPT_TEXT_CHARS} characters."
+            ),
+        )
+
+    return text, prompt_text
+
+
 def validate_upload_metadata(upload: UploadFile) -> str:
     suffix = Path(upload.filename or "").suffix.lower()
     content_type = (upload.content_type or "").lower()
@@ -72,23 +109,48 @@ def validate_upload_metadata(upload: UploadFile) -> str:
 
 
 def persist_upload(upload: UploadFile, suffix: str) -> str:
-    import shutil
+    bytes_written = 0
 
-    with tempfile.NamedTemporaryFile(
-        delete=False, suffix=suffix, dir="/tmp"
-    ) as tmp_file:
-        shutil.copyfileobj(upload.file, tmp_file)
-        return tmp_file.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp_file:
+        while True:
+            chunk = upload.file.read(1024 * 1024)
+            if not chunk:
+                return tmp_file.name
+
+            bytes_written += len(chunk)
+            if bytes_written > MAX_PROMPT_AUDIO_BYTES:
+                tmp_path = tmp_file.name
+                tmp_file.close()
+                safe_unlink(tmp_path)
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        "prompt_audio is too large. "
+                        f"Maximum size is {MAX_PROMPT_AUDIO_BYTES} bytes."
+                    ),
+                )
+
+            tmp_file.write(chunk)
 
 
 def validate_audio_file(path: str) -> None:
     try:
-        torchaudio.load(path)
+        waveform, sample_rate = torchaudio.load(path)
     except Exception as exc:  # pragma: no cover - backend-specific failures
         raise HTTPException(
             status_code=400,
             detail="prompt_audio could not be decoded as a valid audio file.",
         ) from exc
+
+    duration_seconds = waveform.shape[-1] / float(sample_rate)
+    if duration_seconds > MAX_PROMPT_AUDIO_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "prompt_audio is too long. "
+                f"Maximum duration is {MAX_PROMPT_AUDIO_SECONDS:g} seconds."
+            ),
+        )
 
 
 def build_runtime() -> dict:
@@ -101,6 +163,11 @@ def build_runtime() -> dict:
         lang=DEFAULT_INFERENCE["lang"],
     )
     pipeline["model_dir"] = str(model_dir)
+    pipeline["artifact_source"] = (
+        "s3" if os.environ.get("ZIPVOICE_S3_BUCKET") else "huggingface"
+    )
+    pipeline["sample_texts"] = load_sample_texts(model_dir)
+    pipeline["sample_audio"] = list_s3_example_audio()
     return pipeline
 
 
@@ -124,9 +191,19 @@ def health():
     return {
         "status": "ok",
         "model_loaded": True,
+        "artifact_source": runtime["artifact_source"],
         "device": str(runtime["device"]),
         "sampling_rate": runtime["sampling_rate"],
         "model_dir": runtime["model_dir"],
+    }
+
+
+@app.get("/examples")
+def examples():
+    runtime = app.state.runtime
+    return {
+        "sample_texts": runtime["sample_texts"],
+        "sample_audio": runtime["sample_audio"],
     }
 
 
@@ -136,12 +213,7 @@ def synthesize(
     prompt_text: str = Form(...),
     prompt_audio: UploadFile = File(...),
 ):
-    text = text.strip()
-    prompt_text = prompt_text.strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text must not be empty.")
-    if not prompt_text:
-        raise HTTPException(status_code=400, detail="prompt_text must not be empty.")
+    text, prompt_text = validate_text_inputs(text, prompt_text)
 
     suffix = validate_upload_metadata(prompt_audio)
     prompt_path = persist_upload(prompt_audio, suffix=suffix)
