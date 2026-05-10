@@ -34,9 +34,12 @@ s3://your-bucket/zipvoice-ca/
 │   ├── model.json
 │   └── tokens.txt
 ├── examples/
-│   ├── greeting.wav
-│   ├── broadcast.wav
-│   └── assistant.wav
+│   ├── cv17/cv17_090.wav
+│   ├── cv17/cv17_706.wav
+│   ├── festcat/festcat_173.wav
+│   ├── festcat/festcat_706.wav
+│   ├── frescat/frescat_116.wav
+│   └── frescat/frescat_352.wav
 ├── manifests/
 │   ├── samples_manifest.json
 │   └── cached_results_manifest.json
@@ -135,9 +138,9 @@ The worker only makes outbound requests to EC2 and S3. No inbound ports are requ
 Example job creation:
 
 ```bash
-curl -X POST "http://localhost:8000/jobs" \
+  curl -X POST "http://localhost:8000/jobs" \
   -H "Content-Type: application/json" \
-  -d '{"sample_id":"greeting"}'
+  -d '{"sample_id":"cv17_090"}'
 ```
 
 ## Notes

@@ -31,22 +31,40 @@ CATALAN_MODEL_REPO = "ebellob/ZipVoice-CA"
 logger = logging.getLogger(__name__)
 DEFAULT_SAMPLE_TEXTS = [
     {
-        "id": "greeting",
-        "label": "Short greeting",
-        "text": "Bon dia, com estàs?",
-        "prompt_text": "Això és una prova de veu.",
+        "id": "cv17_090",
+        "label": "CV17 sample 090",
+        "text": "Aquesta és una síntesi de demostració en català a partir d'una veu de referència.",
+        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
     },
     {
-        "id": "news",
-        "label": "News style",
-        "text": "Avui el temps serà variable amb intervals de núvols i algunes clarianes.",
-        "prompt_text": "La locució és clara i natural per a una demostració.",
+        "id": "cv17_706",
+        "label": "CV17 sample 706",
+        "text": "La plataforma híbrida envia el treball al worker local i conserva el resultat a S3.",
+        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
     },
     {
-        "id": "assistant",
-        "label": "Virtual assistant",
-        "text": "La teva comanda s'ha processat correctament i ja està en camí.",
-        "prompt_text": "Parlo amb un to proper i tranquil.",
+        "id": "festcat_173",
+        "label": "FestCat sample 173",
+        "text": "La demostració utilitza una mostra real d'àudio com a condicionament de veu.",
+        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    },
+    {
+        "id": "festcat_706",
+        "label": "FestCat sample 706",
+        "text": "Aquest resultat es pot servir des del worker o des de la memòria cau de S3.",
+        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    },
+    {
+        "id": "frescat_116",
+        "label": "Frescat sample 116",
+        "text": "La interfície web pública continua funcionant encara que la inferència pesada es faci fora d'EC2.",
+        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    },
+    {
+        "id": "frescat_352",
+        "label": "Frescat sample 352",
+        "text": "ZipVoice-CA pot sintetitzar nous textos utilitzant aquestes mostres de referència.",
+        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
     },
 ]
 DEFAULT_SAMPLE_TEXTS_FILE = Path(__file__).with_name("sample_texts.json")
