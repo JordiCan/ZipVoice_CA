@@ -17,7 +17,8 @@ body {
 }
 
 button,
-audio {
+audio,
+textarea {
   width: 100%;
 }
 
@@ -113,14 +114,41 @@ h1 {
   gap: 16px;
 }
 
+.dataset-block {
+  display: grid;
+  gap: 14px;
+}
+
+.dataset-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.dataset-heading h3,
+.sample-card h3 {
+  margin: 0;
+}
+
+.dataset-heading span,
+.sample-dataset,
+.sample-reference-text,
+.muted,
+.job-meta dt {
+  color: #b8c5d2;
+}
+
+.dataset-samples {
+  display: grid;
+  gap: 14px;
+}
+
 .sample-card {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 18px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(244, 162, 97, 0.08));
-  color: inherit;
-  cursor: pointer;
   padding: 18px;
-  text-align: left;
   transition: transform 0.2s ease, border-color 0.2s ease;
 }
 
@@ -130,16 +158,12 @@ h1 {
   border-color: rgba(244, 162, 97, 0.7);
 }
 
-.sample-label {
-  display: block;
-  font-size: 1.1rem;
-  margin-bottom: 6px;
-}
-
-.sample-text,
-.muted,
-.job-meta dt {
-  color: #b8c5d2;
+.sample-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 12px;
 }
 
 .section-header {
@@ -148,6 +172,49 @@ h1 {
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
+}
+
+.field-block,
+.source-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.text-input {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  padding: 14px 16px;
+  font: inherit;
+}
+
+.text-area {
+  resize: vertical;
+  min-height: 120px;
+}
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin: 18px 0;
+}
+
+.mode-button,
+.ghost-button {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  padding: 12px 16px;
+  font: inherit;
+}
+
+.mode-button.active {
+  border-color: rgba(244, 162, 97, 0.8);
+  background: rgba(244, 162, 97, 0.12);
 }
 
 .primary-button {
@@ -165,6 +232,42 @@ h1 {
 .primary-button:disabled {
   opacity: 0.7;
   cursor: wait;
+}
+
+.primary-button.secondary,
+.ghost-button.compact {
+  width: auto;
+}
+
+.panel-row,
+.recorder-row,
+.recorder-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+}
+
+.recorder-row {
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.recorder-actions {
+  justify-content: end;
+}
+
+.recording-badge {
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #dfe7ef;
+  font-size: 0.9rem;
+}
+
+.recording-badge.live {
+  background: rgba(231, 111, 81, 0.2);
+  color: #ffd6cf;
 }
 
 .status-pill {
@@ -225,6 +328,15 @@ h1 {
 @media (max-width: 900px) {
   .hero,
   .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sample-card-top,
+  .panel-row,
+  .recorder-row,
+  .recorder-actions,
+  .mode-switch {
+    display: grid;
     grid-template-columns: 1fr;
   }
 }

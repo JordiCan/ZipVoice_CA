@@ -52,7 +52,7 @@ The repository includes local manifest templates:
 - [s3_artifacts/examples/samples_manifest.json](/root/ZipVoice_CA/s3_artifacts/examples/samples_manifest.json)
 - [s3_artifacts/examples/cached_results_manifest.json](/root/ZipVoice_CA/s3_artifacts/examples/cached_results_manifest.json)
 
-Each sample entry should include `id`, `label`, `text`, `prompt_text`, and `prompt_audio_s3_key`.
+Each sample entry should include `id`, `label`, `dataset`, `reference_text`, and `prompt_audio_s3_key`.
 
 ## EC2 environment
 
@@ -67,11 +67,13 @@ export ZIPVOICE_S3_CHECKPOINT_KEY=zipvoice-ca/models/zipvoice_ca.pt
 export ZIPVOICE_S3_MODEL_CONFIG_KEY=zipvoice-ca/models/model.json
 export ZIPVOICE_S3_TOKENS_KEY=zipvoice-ca/models/tokens.txt
 export ZIPVOICE_S3_SAMPLES_PREFIX=zipvoice-ca/examples
+export ZIPVOICE_S3_USER_INPUTS_PREFIX=zipvoice-ca/user-inputs
 export ZIPVOICE_S3_RESULTS_PREFIX=zipvoice-ca/results
 export ZIPVOICE_S3_SAMPLES_MANIFEST_KEY=zipvoice-ca/manifests/samples_manifest.json
 export ZIPVOICE_S3_CACHED_RESULTS_MANIFEST_KEY=zipvoice-ca/manifests/cached_results_manifest.json
 export ZIPVOICE_JOB_POLL_INTERVAL_SECONDS=5
 export ZIPVOICE_JOB_RESULT_URL_TTL=3600
+export ZIPVOICE_MAX_RECORDED_AUDIO_SECONDS=10
 ```
 
 Prefer attaching an IAM Role to the EC2 instance instead of storing static AWS keys in the machine or container.
@@ -120,6 +122,7 @@ export ZIPVOICE_S3_REGION=us-east-1
 export ZIPVOICE_S3_CHECKPOINT_KEY=zipvoice-ca/models/zipvoice_ca.pt
 export ZIPVOICE_S3_MODEL_CONFIG_KEY=zipvoice-ca/models/model.json
 export ZIPVOICE_S3_TOKENS_KEY=zipvoice-ca/models/tokens.txt
+export ZIPVOICE_S3_USER_INPUTS_PREFIX=zipvoice-ca/user-inputs
 export ZIPVOICE_S3_RESULTS_PREFIX=zipvoice-ca/results
 python -m deployment.worker.worker
 ```
@@ -129,8 +132,9 @@ The worker only makes outbound requests to EC2 and S3. No inbound ports are requ
 ## API endpoints
 
 - `GET /health`: hybrid mode, S3 status, worker heartbeat, and sample count
-- `GET /samples`: sample metadata and presigned prompt-audio URLs
-- `POST /jobs`: create an inference job from a `sample_id`
+- `GET /samples`: sample metadata, datasets, transcriptions, and presigned prompt-audio URLs
+- `GET /reference-prompts`: short Catalan phrases for guided browser recording
+- `POST /jobs`: create an inference job from either a sample voice or a recorded prompt
 - `GET /jobs/pending`: worker-only endpoint to claim the next pending job
 - `POST /jobs/{job_id}/result`: worker-only endpoint to publish success or failure
 - `GET /jobs/{job_id}`: job status, cached flag, result key, and result URL when available
@@ -138,9 +142,10 @@ The worker only makes outbound requests to EC2 and S3. No inbound ports are requ
 Example job creation:
 
 ```bash
-  curl -X POST "http://localhost:8000/jobs" \
-  -H "Content-Type: application/json" \
-  -d '{"sample_id":"cv17_090"}'
+curl -X POST "http://localhost:8000/jobs" \
+  -F "text=Bon dia, aquesta és una prova de síntesi." \
+  -F "source_type=sample" \
+  -F "sample_id=cv17_090"
 ```
 
 ## Notes

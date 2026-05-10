@@ -264,6 +264,7 @@ The API exposes:
 
 - `GET /health`
 - `GET /samples`
+- `GET /reference-prompts`
 - `POST /jobs`
 - `GET /jobs/pending`
 - `POST /jobs/{job_id}/result`

@@ -88,24 +88,23 @@ def build_runtime() -> dict:
 
 
 def process_job(runtime: dict, job: dict) -> None:
-    sample = job["sample"]
-    prompt_url = sample.get("prompt_audio_url")
+    prompt_url = job.get("prompt_audio_url")
     if not prompt_url:
-        raise RuntimeError("Sample is missing prompt_audio_url.")
+        raise RuntimeError("Job is missing prompt_audio_url.")
 
     prompt_path = None
     output_path = None
     try:
-        prompt_suffix = Path(sample.get("prompt_audio_name") or "prompt.wav").suffix
+        prompt_suffix = Path(job.get("prompt_audio_name") or "prompt.wav").suffix
         prompt_path = download_file(prompt_url, suffix=prompt_suffix or ".wav")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav", dir="/tmp") as tmp_out:
             output_path = Path(tmp_out.name)
 
         generate_sentence(
             save_path=str(output_path),
-            prompt_text=sample["prompt_text"],
+            prompt_text=job["prompt_text"],
             prompt_wav=str(prompt_path),
-            text=sample["text"],
+            text=job["target_text"],
             model=runtime["model"],
             vocoder=runtime["vocoder"],
             tokenizer=runtime["tokenizer"],
@@ -116,7 +115,8 @@ def process_job(runtime: dict, job: dict) -> None:
             sampling_rate=runtime["sampling_rate"],
         )
 
-        result_key = f"{RESULTS_PREFIX}/{job['sample_id']}/{job['id']}.wav"
+        result_stem = job.get("source_sample_id") or job.get("input_origin") or "prompt"
+        result_key = f"{RESULTS_PREFIX}/{result_stem}/{job['id']}.wav"
         if not upload_s3_file(file_path=output_path, key=result_key):
             raise RuntimeError("Failed to upload synthesized audio to S3.")
 

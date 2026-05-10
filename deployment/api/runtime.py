@@ -6,6 +6,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 import boto3
 from botocore.client import BaseClient
@@ -33,43 +34,44 @@ DEFAULT_SAMPLE_TEXTS = [
     {
         "id": "cv17_090",
         "label": "CV17 sample 090",
-        "text": "Aquesta és una síntesi de demostració en català a partir d'una veu de referència.",
-        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+        "dataset": "Common Voice 17",
+        "reference_text": "Fulles oposades, simples, coriàcies, de color verd brillant i amb glàndules translúcides molt aromàtiques.",
     },
     {
         "id": "cv17_706",
         "label": "CV17 sample 706",
-        "text": "La plataforma híbrida envia el treball al worker local i conserva el resultat a S3.",
-        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+        "dataset": "Common Voice 17",
+        "reference_text": "Les pèrdues del dia també van incloure dos avions i les seves tripulacions.",
     },
     {
         "id": "festcat_173",
         "label": "FestCat sample 173",
-        "text": "La demostració utilitza una mostra real d'àudio com a condicionament de veu.",
-        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+        "dataset": "FestCat",
+        "reference_text": "L'abast total dels desperfectes està sent avaluat en aquests moments per l'àrea municipal d'Hisenda. En aquest sentit, ja ha posat en marxa l'elaboració d'una minuciosa llista de les destrosses. Contenidors, papereres, bancs i paviment van ser destrossats pels manifestants, que van convertir alguns dels principals carrers de la barriada en un autèntic camp de batalla.",
     },
     {
         "id": "festcat_706",
         "label": "FestCat sample 706",
-        "text": "Aquest resultat es pot servir des del worker o des de la memòria cau de S3.",
-        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+        "dataset": "FestCat",
+        "reference_text": "Aquesta nit anem a veure a aquell famós director d'orquestra de qui parlàrem la setmana passada, ja que tocarà el famós adàgio del gran compositor txec.",
     },
     {
         "id": "frescat_116",
         "label": "Frescat sample 116",
-        "text": "La interfície web pública continua funcionant encara que la inferència pesada es faci fora d'EC2.",
-        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+        "dataset": "LaFrescat",
+        "reference_text": "Mentre seia, la dona col·locava la seva jaqueta de pell doblegada sobre els genolls.",
     },
     {
         "id": "frescat_352",
         "label": "Frescat sample 352",
-        "text": "ZipVoice-CA pot sintetitzar nous textos utilitzant aquestes mostres de referència.",
-        "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+        "dataset": "LaFrescat",
+        "reference_text": "La música emborratxa l'esperit dels espectadors i l'ambient es transforma; és comunicació en estat pur, és màgia i misteri.",
     },
 ]
 DEFAULT_SAMPLE_TEXTS_FILE = Path(__file__).with_name("sample_texts.json")
 DEFAULT_SAMPLES_MANIFEST_FILE = Path("s3_artifacts/examples/samples_manifest.json")
 DEFAULT_CACHED_RESULTS_FILE = Path("s3_artifacts/examples/cached_results_manifest.json")
+DEFAULT_REFERENCE_PROMPTS_FILE = Path(__file__).with_name("reference_prompts.json")
 
 
 def get_s3_client() -> Optional[BaseClient]:
@@ -154,6 +156,12 @@ def generate_s3_get_url(key: str, expires_in: Optional[int] = None) -> Optional[
 
 def get_result_download_url(key: str) -> Optional[str]:
     return generate_s3_get_url(key)
+
+
+def build_user_input_s3_key(filename: str) -> str:
+    prefix = os.environ.get("ZIPVOICE_S3_USER_INPUTS_PREFIX", "zipvoice-ca/user-inputs")
+    suffix = Path(filename).suffix or ".webm"
+    return f"{prefix.strip('/')}/{uuid4().hex}{suffix}"
 
 
 def load_json_file(path: Path) -> Any:
@@ -302,6 +310,17 @@ def load_cached_results_manifest() -> dict[str, dict[str, Any]]:
     return result
 
 
+def load_reference_prompts() -> list[str]:
+    if DEFAULT_REFERENCE_PROMPTS_FILE.is_file():
+        data = load_json_file(DEFAULT_REFERENCE_PROMPTS_FILE)
+        if isinstance(data, list):
+            return [str(item) for item in data if str(item).strip()]
+    return [
+        "Bon dia, avui fem una prova de síntesi de veu en català.",
+        "Aquesta frase servirà com a mostra de referència per a la meva veu.",
+    ]
+
+
 def enrich_sample_urls(sample: dict[str, Any]) -> dict[str, Any]:
     key = sample.get("prompt_audio_s3_key")
     if key:
@@ -333,9 +352,13 @@ def get_cached_result_for_sample(
     *,
     cached_results: dict[str, dict[str, Any]],
     sample: dict[str, Any],
+    target_text: str,
 ) -> Optional[dict[str, Any]]:
     cached = cached_results.get(sample["id"])
     if cached is None:
+        return None
+    cached_target_text = str(cached.get("target_text", "")).strip()
+    if cached_target_text and cached_target_text != target_text.strip():
         return None
     return enrich_cached_result(dict(cached))
 

@@ -2,48 +2,48 @@
   {
     "id": "cv17_090",
     "label": "CV17 sample 090",
-    "text": "Aquesta és una síntesi de demostració en català a partir d'una veu de referència.",
-    "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    "dataset": "Common Voice 17",
+    "reference_text": "Fulles oposades, simples, coriàcies, de color verd brillant i amb glàndules translúcides molt aromàtiques.",
     "prompt_audio_s3_key": "zipvoice-ca/examples/cv17/cv17_090.wav",
     "prompt_audio_name": "cv17_090.wav"
   },
   {
     "id": "cv17_706",
     "label": "CV17 sample 706",
-    "text": "La plataforma híbrida envia el treball al worker local i conserva el resultat a S3.",
-    "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    "dataset": "Common Voice 17",
+    "reference_text": "Les pèrdues del dia també van incloure dos avions i les seves tripulacions.",
     "prompt_audio_s3_key": "zipvoice-ca/examples/cv17/cv17_706.wav",
     "prompt_audio_name": "cv17_706.wav"
   },
   {
     "id": "festcat_173",
     "label": "FestCat sample 173",
-    "text": "La demostració utilitza una mostra real d'àudio com a condicionament de veu.",
-    "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    "dataset": "FestCat",
+    "reference_text": "L'abast total dels desperfectes està sent avaluat en aquests moments per l'àrea municipal d'Hisenda. En aquest sentit, ja ha posat en marxa l'elaboració d'una minuciosa llista de les destrosses. Contenidors, papereres, bancs i paviment van ser destrossats pels manifestants, que van convertir alguns dels principals carrers de la barriada en un autèntic camp de batalla.",
     "prompt_audio_s3_key": "zipvoice-ca/examples/festcat/festcat_173.wav",
     "prompt_audio_name": "festcat_173.wav"
   },
   {
     "id": "festcat_706",
     "label": "FestCat sample 706",
-    "text": "Aquest resultat es pot servir des del worker o des de la memòria cau de S3.",
-    "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    "dataset": "FestCat",
+    "reference_text": "Aquesta nit anem a veure a aquell famós director d'orquestra de qui parlàrem la setmana passada, ja que tocarà el famós adàgio del gran compositor txec.",
     "prompt_audio_s3_key": "zipvoice-ca/examples/festcat/festcat_706.wav",
     "prompt_audio_name": "festcat_706.wav"
   },
   {
     "id": "frescat_116",
     "label": "Frescat sample 116",
-    "text": "La interfície web pública continua funcionant encara que la inferència pesada es faci fora d'EC2.",
-    "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    "dataset": "LaFrescat",
+    "reference_text": "Mentre seia, la dona col·locava la seva jaqueta de pell doblegada sobre els genolls.",
     "prompt_audio_s3_key": "zipvoice-ca/examples/frescat/frescat_116.wav",
     "prompt_audio_name": "frescat_116.wav"
   },
   {
     "id": "frescat_352",
     "label": "Frescat sample 352",
-    "text": "ZipVoice-CA pot sintetitzar nous textos utilitzant aquestes mostres de referència.",
-    "prompt_text": "Transcripció de referència pendent d'ajustar per a aquesta mostra.",
+    "dataset": "LaFrescat",
+    "reference_text": "La música emborratxa l'esperit dels espectadors i l'ambient es transforma; és comunicació en estat pur, és màgia i misteri.",
     "prompt_audio_s3_key": "zipvoice-ca/examples/frescat/frescat_352.wav",
     "prompt_audio_name": "frescat_352.wav"
   }
