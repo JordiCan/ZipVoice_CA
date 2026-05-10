@@ -1,3 +1,12 @@
+FROM node:20-slim AS frontend-build
+
+WORKDIR /frontend
+
+COPY deployment/frontend/package.json deployment/frontend/vite.config.js deployment/frontend/index.html ./
+COPY deployment/frontend/src ./src
+
+RUN npm install && npm run build
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -22,6 +31,7 @@ RUN pip install --upgrade pip && \
     pip install -r requirements_api.txt
 
 COPY . .
+COPY --from=frontend-build /frontend/dist ./deployment/frontend/dist
 
 EXPOSE 8000
 

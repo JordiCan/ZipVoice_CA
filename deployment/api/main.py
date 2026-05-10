@@ -1,174 +1,52 @@
-import logging
+from __future__ import annotations
+
 import os
-import tempfile
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import torchaudio
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
-from starlette.background import BackgroundTask
+from fastapi.staticfiles import StaticFiles
 
+from deployment.api.frontend import serve_frontend
+from deployment.api.job_store import InMemoryJobStore, utc_now
+from deployment.api.models import (
+    CreateJobRequest,
+    JobResponse,
+    PendingJobResponse,
+    WorkerResultRequest,
+)
 from deployment.api.runtime import (
-    ensure_model_artifacts,
-    list_s3_example_audio,
-    load_inference_pipeline,
-    load_sample_texts,
+    enrich_sample_urls,
+    get_cached_result_for_sample,
+    get_result_download_url,
+    get_sample_by_id,
+    load_cached_results_manifest,
+    load_samples_manifest,
 )
-from zipvoice.bin.infer_zipvoice import generate_sentence
 
-RUNTIME_MODEL_DIR = Path(
-    os.environ.get("ZIPVOICE_MODEL_DIR", "models/zipvoice_ca_runtime")
+DEMO_MODE = os.environ.get("ZIPVOICE_DEMO_MODE", "hybrid")
+WORKER_TOKEN = os.environ.get("ZIPVOICE_WORKER_TOKEN", "").strip()
+FRONTEND_DIST_DIR = Path(
+    os.environ.get("ZIPVOICE_FRONTEND_DIST_DIR", "deployment/frontend/dist")
 )
-MAX_TEXT_CHARS = int(os.environ.get("ZIPVOICE_MAX_TEXT_CHARS", "300"))
-MAX_PROMPT_TEXT_CHARS = int(os.environ.get("ZIPVOICE_MAX_PROMPT_TEXT_CHARS", "300"))
-MAX_PROMPT_AUDIO_BYTES = int(
-    os.environ.get("ZIPVOICE_MAX_PROMPT_AUDIO_BYTES", str(10 * 1024 * 1024))
-)
-MAX_PROMPT_AUDIO_SECONDS = float(
-    os.environ.get("ZIPVOICE_MAX_PROMPT_AUDIO_SECONDS", "30")
-)
-DEFAULT_INFERENCE = {
-    "model_name": "zipvoice",
-    "checkpoint_name": "zipvoice_ca.pt",
-    "tokenizer_name": "espeak",
-    "lang": "ca",
-    "guidance_scale": 1.0,
-    "num_step": 25,
-}
-ALLOWED_CONTENT_TYPES = {
-    "audio/wav",
-    "audio/x-wav",
-    "audio/wave",
-    "audio/mpeg",
-    "audio/mp3",
-    "audio/flac",
-    "audio/x-flac",
-    "audio/ogg",
-    "audio/x-m4a",
-    "audio/mp4",
-}
-ALLOWED_SUFFIXES = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".mp4"}
-
-logger = logging.getLogger(__name__)
-inference_lock = threading.Lock()
-
-
-def safe_unlink(path: str) -> None:
-    try:
-        Path(path).unlink(missing_ok=True)
-    except OSError:
-        logger.warning("Could not delete temporary file %s", path, exc_info=True)
-
-
-def validate_text_inputs(text: str, prompt_text: str) -> tuple[str, str]:
-    text = text.strip()
-    prompt_text = prompt_text.strip()
-
-    if not text:
-        raise HTTPException(status_code=400, detail="text must not be empty.")
-    if not prompt_text:
-        raise HTTPException(status_code=400, detail="prompt_text must not be empty.")
-    if len(text) > MAX_TEXT_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"text must be at most {MAX_TEXT_CHARS} characters.",
-        )
-    if len(prompt_text) > MAX_PROMPT_TEXT_CHARS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"prompt_text must be at most {MAX_PROMPT_TEXT_CHARS} characters."
-            ),
-        )
-
-    return text, prompt_text
-
-
-def validate_upload_metadata(upload: UploadFile) -> str:
-    suffix = Path(upload.filename or "").suffix.lower()
-    content_type = (upload.content_type or "").lower()
-
-    if suffix and suffix in ALLOWED_SUFFIXES:
-        return suffix
-    if content_type in ALLOWED_CONTENT_TYPES:
-        if content_type in {"audio/wav", "audio/x-wav", "audio/wave"}:
-            return ".wav"
-        if content_type in {"audio/mpeg", "audio/mp3"}:
-            return ".mp3"
-        if content_type in {"audio/flac", "audio/x-flac"}:
-            return ".flac"
-        if content_type == "audio/ogg":
-            return ".ogg"
-        return ".m4a"
-    raise HTTPException(
-        status_code=400,
-        detail="prompt_audio must be a supported audio file (wav, mp3, flac, ogg, m4a).",
-    )
-
-
-def persist_upload(upload: UploadFile, suffix: str) -> str:
-    bytes_written = 0
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp") as tmp_file:
-        while True:
-            chunk = upload.file.read(1024 * 1024)
-            if not chunk:
-                return tmp_file.name
-
-            bytes_written += len(chunk)
-            if bytes_written > MAX_PROMPT_AUDIO_BYTES:
-                tmp_path = tmp_file.name
-                tmp_file.close()
-                safe_unlink(tmp_path)
-                raise HTTPException(
-                    status_code=413,
-                    detail=(
-                        "prompt_audio is too large. "
-                        f"Maximum size is {MAX_PROMPT_AUDIO_BYTES} bytes."
-                    ),
-                )
-
-            tmp_file.write(chunk)
-
-
-def validate_audio_file(path: str) -> None:
-    try:
-        waveform, sample_rate = torchaudio.load(path)
-    except Exception as exc:  # pragma: no cover - backend-specific failures
-        raise HTTPException(
-            status_code=400,
-            detail="prompt_audio could not be decoded as a valid audio file.",
-        ) from exc
-
-    duration_seconds = waveform.shape[-1] / float(sample_rate)
-    if duration_seconds > MAX_PROMPT_AUDIO_SECONDS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "prompt_audio is too long. "
-                f"Maximum duration is {MAX_PROMPT_AUDIO_SECONDS:g} seconds."
-            ),
-        )
 
 
 def build_runtime() -> dict:
-    model_dir = ensure_model_artifacts(RUNTIME_MODEL_DIR)
-    pipeline = load_inference_pipeline(
-        model_name=DEFAULT_INFERENCE["model_name"],
-        model_dir=str(model_dir),
-        checkpoint_name=DEFAULT_INFERENCE["checkpoint_name"],
-        tokenizer_name=DEFAULT_INFERENCE["tokenizer_name"],
-        lang=DEFAULT_INFERENCE["lang"],
-    )
-    pipeline["model_dir"] = str(model_dir)
-    pipeline["artifact_source"] = (
-        "s3" if os.environ.get("ZIPVOICE_S3_BUCKET") else "huggingface"
-    )
-    pipeline["sample_texts"] = load_sample_texts(model_dir)
-    pipeline["sample_audio"] = list_s3_example_audio()
-    return pipeline
+    samples = load_samples_manifest()
+    cached_results = load_cached_results_manifest()
+    samples_by_id = {sample["id"]: sample for sample in samples}
+    return {
+        "demo_mode": DEMO_MODE,
+        "job_store": InMemoryJobStore(),
+        "samples": samples,
+        "samples_by_id": samples_by_id,
+        "cached_results": cached_results,
+        "frontend_dist_dir": FRONTEND_DIST_DIR,
+        "worker_last_seen_at": None,
+        "worker_last_seen_worker_id": None,
+        "s3_enabled": bool(os.environ.get("ZIPVOICE_S3_BUCKET")),
+    }
 
 
 @asynccontextmanager
@@ -178,88 +56,147 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ZipVoice-CA API",
-    description="Demo API for Catalan zero-shot text-to-speech with ZipVoice-CA.",
-    version="1.0.0",
+    title="ZipVoice-CA Hybrid API",
+    description="Hybrid cloud-local demo API for Catalan zero-shot text-to-speech with ZipVoice-CA.",
+    version="2.0.0",
     lifespan=lifespan,
 )
+
+assets_dir = FRONTEND_DIST_DIR / "assets"
+app.mount(
+    "/assets",
+    StaticFiles(directory=str(assets_dir), check_dir=False),
+    name="assets",
+)
+
+
+def require_worker_token(x_worker_token: str = Header(default="")) -> str:
+    if not WORKER_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="Worker support is disabled because ZIPVOICE_WORKER_TOKEN is not configured.",
+        )
+    if x_worker_token != WORKER_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid worker token.")
+    return x_worker_token
+
+
+def touch_worker(app_: FastAPI, worker_id: str) -> None:
+    runtime = app_.state.runtime
+    runtime["worker_last_seen_at"] = utc_now()
+    runtime["worker_last_seen_worker_id"] = worker_id
+
+
+def serialize_job(job) -> JobResponse:
+    return JobResponse(**job.as_dict())
 
 
 @app.get("/health")
 def health():
     runtime = app.state.runtime
+    last_seen_at = runtime["worker_last_seen_at"]
     return {
         "status": "ok",
-        "model_loaded": True,
-        "artifact_source": runtime["artifact_source"],
-        "device": str(runtime["device"]),
-        "sampling_rate": runtime["sampling_rate"],
-        "model_dir": runtime["model_dir"],
+        "demo_mode": runtime["demo_mode"],
+        "s3_enabled": runtime["s3_enabled"],
+        "worker_configured": bool(WORKER_TOKEN),
+        "worker_last_seen_at": last_seen_at.isoformat().replace("+00:00", "Z")
+        if last_seen_at
+        else None,
+        "worker_last_seen_worker_id": runtime["worker_last_seen_worker_id"],
+        "sample_count": len(runtime["samples"]),
     }
 
 
-@app.get("/examples")
-def examples():
+@app.get("/samples")
+def samples():
     runtime = app.state.runtime
-    return {
-        "sample_texts": runtime["sample_texts"],
-        "sample_audio": runtime["sample_audio"],
-    }
+    return {"samples": [enrich_sample_urls(dict(sample)) for sample in runtime["samples"]]}
 
 
-@app.post("/synthesize", response_class=FileResponse)
-def synthesize(
-    text: str = Form(...),
-    prompt_text: str = Form(...),
-    prompt_audio: UploadFile = File(...),
-):
-    text, prompt_text = validate_text_inputs(text, prompt_text)
+@app.post("/jobs", response_model=JobResponse, status_code=201)
+def create_job(payload: CreateJobRequest):
+    runtime = app.state.runtime
+    sample = get_sample_by_id(runtime["samples_by_id"], payload.sample_id)
+    if sample is None:
+        raise HTTPException(status_code=404, detail="Unknown sample_id.")
 
-    suffix = validate_upload_metadata(prompt_audio)
-    prompt_path = persist_upload(prompt_audio, suffix=suffix)
-    output_path = None
-
-    try:
-        validate_audio_file(prompt_path)
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix=".wav", dir="/tmp"
-        ) as tmp_out:
-            output_path = tmp_out.name
-
-        runtime = app.state.runtime
-        with inference_lock:
-            generate_sentence(
-                save_path=output_path,
-                prompt_text=prompt_text,
-                prompt_wav=prompt_path,
-                text=text,
-                model=runtime["model"],
-                vocoder=runtime["vocoder"],
-                tokenizer=runtime["tokenizer"],
-                feature_extractor=runtime["feature_extractor"],
-                device=runtime["device"],
-                num_step=DEFAULT_INFERENCE["num_step"],
-                guidance_scale=DEFAULT_INFERENCE["guidance_scale"],
-                sampling_rate=runtime["sampling_rate"],
-            )
-    except HTTPException:
-        if output_path is not None:
-            safe_unlink(output_path)
-        raise
-    except Exception as exc:  # pragma: no cover - runtime depends on heavy ML stack
-        if output_path is not None:
-            safe_unlink(output_path)
-        logger.exception("Synthesis failed")
-        raise HTTPException(
-            status_code=500, detail="Failed to synthesize audio."
-        ) from exc
-    finally:
-        safe_unlink(prompt_path)
-        prompt_audio.file.close()
-
-    return FileResponse(
-        path=output_path,
-        media_type="audio/wav",
-        filename="zipvoice_ca_output.wav",
-        background=BackgroundTask(safe_unlink, output_path),
+    cached_result = get_cached_result_for_sample(
+        cached_results=runtime["cached_results"],
+        sample=sample,
     )
+    job = runtime["job_store"].create_job(
+        sample=sample,
+        owner_token="public",
+        cached_result=cached_result,
+    )
+    return serialize_job(job)
+
+
+@app.get("/jobs/pending", response_model=PendingJobResponse)
+def get_pending_job(
+    _: str = Depends(require_worker_token),
+    x_worker_id: str = Header(default="worker"),
+):
+    runtime = app.state.runtime
+    worker_id = x_worker_id or "worker"
+    touch_worker(app, worker_id)
+    job = runtime["job_store"].claim_next_job(worker_id=worker_id)
+    if job is None:
+        return PendingJobResponse(job=None)
+    return PendingJobResponse(job=serialize_job(job))
+
+
+@app.get("/jobs/{job_id}", response_model=JobResponse)
+def get_job(job_id: str):
+    runtime = app.state.runtime
+    job = runtime["job_store"].get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    if job.result_s3_key:
+        job.result_url = get_result_download_url(job.result_s3_key)
+    return serialize_job(job)
+
+
+@app.post("/jobs/{job_id}/result", response_model=JobResponse)
+def post_job_result(
+    job_id: str,
+    payload: WorkerResultRequest,
+    _: str = Depends(require_worker_token),
+):
+    touch_worker(app, payload.worker_id)
+    result_url = (
+        get_result_download_url(payload.result_s3_key)
+        if payload.result_s3_key
+        else None
+    )
+    job = app.state.runtime["job_store"].complete_job(
+        job_id=job_id,
+        worker_id=payload.worker_id,
+        status=payload.status,
+        result_s3_key=payload.result_s3_key,
+        result_url=result_url,
+        error=payload.error,
+        metadata=payload.metadata,
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return serialize_job(job)
+
+
+@app.get("/", include_in_schema=False)
+def frontend_index():
+    return serve_frontend(app.state.runtime["frontend_dist_dir"])
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def frontend_spa(full_path: str):
+    if full_path.startswith(("health", "samples", "jobs", "docs", "openapi.json")):
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    dist_dir = app.state.runtime["frontend_dist_dir"]
+    requested = dist_dir / full_path
+    if requested.is_file():
+        return FileResponse(requested)
+    return serve_frontend(dist_dir)

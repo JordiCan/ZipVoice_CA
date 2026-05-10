@@ -11,6 +11,8 @@ MODEL_DIR_IN_CONTAINER="${MODEL_DIR_IN_CONTAINER:-/app/models/zipvoice_ca_runtim
 ENV_ARGS=()
 
 for var_name in \
+    ZIPVOICE_DEMO_MODE \
+    ZIPVOICE_WORKER_TOKEN \
     ZIPVOICE_S3_BUCKET \
     ZIPVOICE_S3_REGION \
     ZIPVOICE_S3_ENDPOINT_URL \
@@ -21,6 +23,13 @@ for var_name in \
     ZIPVOICE_S3_SAMPLE_TEXTS_KEY \
     ZIPVOICE_S3_EXAMPLES_PREFIX \
     ZIPVOICE_S3_EXAMPLE_URL_TTL \
+    ZIPVOICE_S3_SAMPLES_PREFIX \
+    ZIPVOICE_S3_RESULTS_PREFIX \
+    ZIPVOICE_S3_SAMPLES_MANIFEST_KEY \
+    ZIPVOICE_S3_CACHED_RESULTS_MANIFEST_KEY \
+    ZIPVOICE_JOB_POLL_INTERVAL_SECONDS \
+    ZIPVOICE_JOB_RESULT_URL_TTL \
+    ZIPVOICE_FRONTEND_DIST_DIR \
     ZIPVOICE_SAMPLE_TEXTS_FILE \
     ZIPVOICE_MAX_TEXT_CHARS \
     ZIPVOICE_MAX_PROMPT_TEXT_CHARS \
@@ -55,5 +64,6 @@ sudo docker run -d \
 echo "Container ${CONTAINER_NAME} started on port ${HOST_PORT}"
 echo "Model cache volume: ${MODEL_VOLUME_NAME}"
 echo "Health check: curl http://localhost:${HOST_PORT}/health"
-echo "Swagger UI:   http://<EC2_PUBLIC_IP>:${HOST_PORT}/docs"
+echo "Frontend UI:  http://<EC2_PUBLIC_IP>:${HOST_PORT}/"
+echo "OpenAPI docs: http://<EC2_PUBLIC_IP>:${HOST_PORT}/docs"
 echo "Logs:         sudo docker logs -f ${CONTAINER_NAME}"

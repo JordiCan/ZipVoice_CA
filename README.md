@@ -213,7 +213,7 @@ The evaluation script computes speaker similarity, WER/CER, and UTMOS scores for
 
 ## Deployment
 
-This repository also includes a publishable inference deployment based on FastAPI, Docker, EC2, and S3-backed model assets.
+This repository also includes a hybrid deployment for demos where EC2 serves the public app and API, while a local worker performs the heavy TTS inference.
 
 - Docker image: [deployment/Dockerfile](/root/ZipVoice_CA/deployment/Dockerfile)
 - API app: [deployment/api/main.py](/root/ZipVoice_CA/deployment/api/main.py)
@@ -224,37 +224,60 @@ Deployment highlights:
 
 - one EC2 instance
 - one Docker container
-- Swagger UI at `/docs` as the demo web interface
-- S3-backed checkpoint and optional demo assets
-- `/examples` endpoint with sample texts and optional reference audio links
+- Vite + React frontend served at `/`
+- FastAPI job coordinator on EC2
+- local worker polling `GET /jobs/pending`
+- S3-backed model assets, sample manifests, and cached demo outputs
 
 Quick local run:
 
 ```bash
 docker build -f deployment/Dockerfile -t zipvoice-api .
-docker volume create zipvoice-model-cache
 export ZIPVOICE_S3_BUCKET=your-bucket
+export ZIPVOICE_DEMO_MODE=hybrid
+export ZIPVOICE_WORKER_TOKEN=change-me
 export ZIPVOICE_S3_CHECKPOINT_KEY=zipvoice-ca/models/zipvoice_ca.pt
+export ZIPVOICE_S3_MODEL_CONFIG_KEY=zipvoice-ca/models/model.json
+export ZIPVOICE_S3_TOKENS_KEY=zipvoice-ca/models/tokens.txt
+export ZIPVOICE_S3_SAMPLES_MANIFEST_KEY=zipvoice-ca/manifests/samples_manifest.json
+export ZIPVOICE_S3_CACHED_RESULTS_MANIFEST_KEY=zipvoice-ca/manifests/cached_results_manifest.json
 docker run --rm \
   -p 8000:8000 \
-  -e ZIPVOICE_MODEL_DIR=/app/models/zipvoice_ca_runtime \
+  -e ZIPVOICE_DEMO_MODE="$ZIPVOICE_DEMO_MODE" \
+  -e ZIPVOICE_WORKER_TOKEN="$ZIPVOICE_WORKER_TOKEN" \
   -e ZIPVOICE_S3_BUCKET="$ZIPVOICE_S3_BUCKET" \
   -e ZIPVOICE_S3_CHECKPOINT_KEY="$ZIPVOICE_S3_CHECKPOINT_KEY" \
-  -v zipvoice-model-cache:/app/models/zipvoice_ca_runtime \
+  -e ZIPVOICE_S3_MODEL_CONFIG_KEY="$ZIPVOICE_S3_MODEL_CONFIG_KEY" \
+  -e ZIPVOICE_S3_TOKENS_KEY="$ZIPVOICE_S3_TOKENS_KEY" \
+  -e ZIPVOICE_S3_SAMPLES_MANIFEST_KEY="$ZIPVOICE_S3_SAMPLES_MANIFEST_KEY" \
+  -e ZIPVOICE_S3_CACHED_RESULTS_MANIFEST_KEY="$ZIPVOICE_S3_CACHED_RESULTS_MANIFEST_KEY" \
   zipvoice-api
 ```
 
-Then open:
+Then open the demo UI:
 
 ```text
-http://localhost:8000/docs
+http://localhost:8000/
 ```
 
 The API exposes:
 
 - `GET /health`
-- `GET /examples`
-- `POST /synthesize`
+- `GET /samples`
+- `POST /jobs`
+- `GET /jobs/pending`
+- `POST /jobs/{job_id}/result`
+- `GET /jobs/{job_id}`
+
+The local worker runs separately in your inference-capable environment:
+
+```bash
+export EC2_API_URL=http://localhost:8000
+export WORKER_TOKEN="$ZIPVOICE_WORKER_TOKEN"
+export ZIPVOICE_S3_BUCKET=your-bucket
+export ZIPVOICE_S3_RESULTS_PREFIX=zipvoice-ca/results
+python -m deployment.worker.worker
+```
 
 The full deployment guide, including the recommended S3 layout and EC2 setup, is available in [deployment/aws/README.md](/root/ZipVoice_CA/deployment/aws/README.md).
 

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "greeting",
+    "label": "Short greeting",
+    "text": "Bon dia, com estàs?",
+    "prompt_text": "Això és una prova de veu.",
+    "prompt_audio_s3_key": "zipvoice-ca/examples/greeting.wav",
+    "prompt_audio_name": "greeting.wav"
+  },
+  {
+    "id": "broadcast",
+    "label": "Broadcast style",
+    "text": "Benvinguts a la demostració de síntesi de veu en català amb ZipVoice-CA.",
+    "prompt_text": "La veu de referència és clara, estable i natural.",
+    "prompt_audio_s3_key": "zipvoice-ca/examples/broadcast.wav",
+    "prompt_audio_name": "broadcast.wav"
+  },
+  {
+    "id": "assistant",
+    "label": "Assistant response",
+    "text": "La teva reserva ha estat confirmada i rebràs els detalls en pocs minuts.",
+    "prompt_text": "Parlo amb un to proper i tranquil.",
+    "prompt_audio_s3_key": "zipvoice-ca/examples/assistant.wav",
+    "prompt_audio_name": "assistant.wav"
+  }
+]

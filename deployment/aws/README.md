@@ -1,35 +1,31 @@
 # AWS Deployment for ZipVoice-CA
 
-ZipVoice-CA includes a compact AWS deployment designed for fast demo delivery: a Dockerized FastAPI service running on EC2, with model artifacts and optional demo assets stored in Amazon S3.
+ZipVoice-CA now uses a hybrid architecture for demos: the public frontend and API run on EC2, while the real model executes on a local worker machine with enough compute.
 
-If you want the step-by-step AWS Academy flow, use [AWS_ACADEMY_GUIDE.md](/root/ZipVoice_CA/deployment/aws/AWS_ACADEMY_GUIDE.md).
+If you want the AWS Academy launch flow, use [AWS_ACADEMY_GUIDE.md](/root/ZipVoice_CA/deployment/aws/AWS_ACADEMY_GUIDE.md).
 
 ## Architecture
 
-- `EC2`: runs the API container
-- `Docker`: packages the runtime and serves FastAPI on port `8000`
-- `S3`: stores the Catalan checkpoint and optional demo assets
-- `Swagger UI`: provides a ready-to-use web interface at `/docs`
+```text
+Browser
+  -> React frontend on EC2
+  -> FastAPI job API on EC2
+  -> S3 for samples, manifests, model assets, and outputs
+  -> local worker polling EC2 and running ZipVoice-CA
+```
 
-At startup, the API prepares a runtime directory with:
-
-- `zipvoice_ca.pt`
-- `model.json`
-- `tokens.txt`
-
-These files can be loaded directly from S3. If you only place the checkpoint in S3, the API can still fetch `model.json` and `tokens.txt` from the upstream ZipVoice repository.
+This keeps the deployed cloud interface and storage pipeline while avoiding the need to run the full inference stack on an undersized EC2 instance.
 
 ## Included files
 
-- `deployment/api/main.py`: FastAPI app, validation, and example endpoints
-- `deployment/api/runtime.py`: model loading, S3 downloads, and sample asset helpers
-- `deployment/api/sample_texts.json`: bundled Catalan example prompts
-- `deployment/Dockerfile`: CPU image with health check support
+- `deployment/api/main.py`: hybrid FastAPI app with sample listing, job queue, worker callbacks, and SPA serving
+- `deployment/api/runtime.py`: S3 manifests, presigned URLs, model loading helpers, and upload/download utilities
+- `deployment/worker/worker.py`: polling worker for local inference
+- `deployment/frontend/`: Vite + React demo UI
+- `deployment/Dockerfile`: multi-stage image that builds the frontend and serves the API
 - `deployment/aws/ec2_bootstrap.sh`: helper script for a prepared EC2 instance
 
-## S3 asset layout
-
-A practical bucket layout looks like this:
+## Recommended S3 layout
 
 ```text
 s3://your-bucket/zipvoice-ca/
@@ -37,142 +33,115 @@ s3://your-bucket/zipvoice-ca/
 │   ├── zipvoice_ca.pt
 │   ├── model.json
 │   └── tokens.txt
-└── examples/
-    ├── sample_texts.json
-    ├── prompt_01.wav
-    └── prompt_02.wav
+├── examples/
+│   ├── greeting.wav
+│   ├── broadcast.wav
+│   └── assistant.wav
+├── manifests/
+│   ├── samples_manifest.json
+│   └── cached_results_manifest.json
+└── results/
+    └── ...
 ```
 
-Recommended environment variables:
+The repository includes local manifest templates:
 
-- `ZIPVOICE_S3_BUCKET`
-- `ZIPVOICE_S3_CHECKPOINT_KEY`
-- `ZIPVOICE_S3_MODEL_CONFIG_KEY`
-- `ZIPVOICE_S3_TOKENS_KEY`
-- `ZIPVOICE_S3_SAMPLE_TEXTS_KEY`
-- `ZIPVOICE_S3_EXAMPLES_PREFIX`
-- `ZIPVOICE_S3_REGION`
+- [s3_artifacts/examples/samples_manifest.json](/root/ZipVoice_CA/s3_artifacts/examples/samples_manifest.json)
+- [s3_artifacts/examples/cached_results_manifest.json](/root/ZipVoice_CA/s3_artifacts/examples/cached_results_manifest.json)
 
-Example:
+Each sample entry should include `id`, `label`, `text`, `prompt_text`, and `prompt_audio_s3_key`.
+
+## EC2 environment
+
+Recommended environment variables for the API container:
 
 ```bash
+export ZIPVOICE_DEMO_MODE=hybrid
+export ZIPVOICE_WORKER_TOKEN=change-me
 export ZIPVOICE_S3_BUCKET=your-bucket
 export ZIPVOICE_S3_REGION=us-east-1
 export ZIPVOICE_S3_CHECKPOINT_KEY=zipvoice-ca/models/zipvoice_ca.pt
 export ZIPVOICE_S3_MODEL_CONFIG_KEY=zipvoice-ca/models/model.json
 export ZIPVOICE_S3_TOKENS_KEY=zipvoice-ca/models/tokens.txt
-export ZIPVOICE_S3_SAMPLE_TEXTS_KEY=zipvoice-ca/examples/sample_texts.json
-export ZIPVOICE_S3_EXAMPLES_PREFIX=zipvoice-ca/examples
+export ZIPVOICE_S3_SAMPLES_PREFIX=zipvoice-ca/examples
+export ZIPVOICE_S3_RESULTS_PREFIX=zipvoice-ca/results
+export ZIPVOICE_S3_SAMPLES_MANIFEST_KEY=zipvoice-ca/manifests/samples_manifest.json
+export ZIPVOICE_S3_CACHED_RESULTS_MANIFEST_KEY=zipvoice-ca/manifests/cached_results_manifest.json
+export ZIPVOICE_JOB_POLL_INTERVAL_SECONDS=5
+export ZIPVOICE_JOB_RESULT_URL_TTL=3600
 ```
 
-## Local Docker run
-
-```bash
-docker build -f deployment/Dockerfile -t zipvoice-api .
-docker volume create zipvoice-model-cache
-docker run --rm \
-  -p 8000:8000 \
-  -e ZIPVOICE_MODEL_DIR=/app/models/zipvoice_ca_runtime \
-  -e ZIPVOICE_S3_BUCKET="$ZIPVOICE_S3_BUCKET" \
-  -e ZIPVOICE_S3_REGION="$ZIPVOICE_S3_REGION" \
-  -e ZIPVOICE_S3_CHECKPOINT_KEY="$ZIPVOICE_S3_CHECKPOINT_KEY" \
-  -e ZIPVOICE_S3_MODEL_CONFIG_KEY="$ZIPVOICE_S3_MODEL_CONFIG_KEY" \
-  -e ZIPVOICE_S3_TOKENS_KEY="$ZIPVOICE_S3_TOKENS_KEY" \
-  -e ZIPVOICE_S3_SAMPLE_TEXTS_KEY="$ZIPVOICE_S3_SAMPLE_TEXTS_KEY" \
-  -e ZIPVOICE_S3_EXAMPLES_PREFIX="$ZIPVOICE_S3_EXAMPLES_PREFIX" \
-  -v zipvoice-model-cache:/app/models/zipvoice_ca_runtime \
-  zipvoice-api
-```
-
-Then open:
-
-```text
-http://localhost:8000/docs
-```
+Prefer attaching an IAM Role to the EC2 instance instead of storing static AWS keys in the machine or container.
 
 ## EC2 deployment
 
-1. Launch an Ubuntu `t3.large` instance.
-2. Open inbound rules for `22/tcp` and `8000/tcp`.
-3. Install Docker and Git:
-
-```bash
-sudo apt update
-sudo apt install -y docker.io git
-sudo systemctl enable --now docker
-```
-
-4. Clone the repository:
-
-```bash
-git clone https://github.com/YOUR_USER/ZipVoice_CA.git
-cd ZipVoice_CA
-```
-
-5. Export your S3 settings:
-
-```bash
-export ZIPVOICE_S3_BUCKET=your-bucket
-export ZIPVOICE_S3_REGION=us-east-1
-export ZIPVOICE_S3_CHECKPOINT_KEY=zipvoice-ca/models/zipvoice_ca.pt
-export ZIPVOICE_S3_MODEL_CONFIG_KEY=zipvoice-ca/models/model.json
-export ZIPVOICE_S3_TOKENS_KEY=zipvoice-ca/models/tokens.txt
-export ZIPVOICE_S3_SAMPLE_TEXTS_KEY=zipvoice-ca/examples/sample_texts.json
-export ZIPVOICE_S3_EXAMPLES_PREFIX=zipvoice-ca/examples
-```
-
-6. Start the deployment:
+1. Launch an Ubuntu instance and open `22/tcp` plus `8000/tcp`.
+2. Clone the repository on the instance.
+3. Export the environment variables above.
+4. Start the container:
 
 ```bash
 chmod +x deployment/aws/ec2_bootstrap.sh
 ./deployment/aws/ec2_bootstrap.sh
 ```
 
-7. Verify the API:
+5. Verify the service:
 
 ```bash
 curl http://YOUR_PUBLIC_IP:8000/health
-curl http://YOUR_PUBLIC_IP:8000/examples
+curl http://YOUR_PUBLIC_IP:8000/samples
 ```
 
-8. Open the interactive interface:
+6. Open the demo UI:
+
+```text
+http://YOUR_PUBLIC_IP:8000/
+```
+
+OpenAPI docs remain available at:
 
 ```text
 http://YOUR_PUBLIC_IP:8000/docs
 ```
 
-## API endpoints
+## Local worker
 
-- `GET /health`: service status, loaded device, runtime path, and artifact source
-- `GET /examples`: sample texts and optional presigned S3 URLs for reference audio
-- `POST /synthesize`: inference endpoint returning `audio/wav`
-
-Example request:
+Run the worker from your local machine or a stronger host:
 
 ```bash
-curl -X POST "http://localhost:8000/synthesize" \
-  -F "text=Bon dia, com estàs?" \
-  -F "prompt_text=Això és una prova de veu." \
-  -F "prompt_audio=@prompt.wav" \
-  --output result.wav
+export EC2_API_URL=http://YOUR_PUBLIC_IP:8000
+export WORKER_TOKEN=change-me
+export WORKER_ID=my-laptop
+export ZIPVOICE_S3_BUCKET=your-bucket
+export ZIPVOICE_S3_REGION=us-east-1
+export ZIPVOICE_S3_CHECKPOINT_KEY=zipvoice-ca/models/zipvoice_ca.pt
+export ZIPVOICE_S3_MODEL_CONFIG_KEY=zipvoice-ca/models/model.json
+export ZIPVOICE_S3_TOKENS_KEY=zipvoice-ca/models/tokens.txt
+export ZIPVOICE_S3_RESULTS_PREFIX=zipvoice-ca/results
+python -m deployment.worker.worker
 ```
 
-## Request shaping
+The worker only makes outbound requests to EC2 and S3. No inbound ports are required on your local machine.
 
-Default limits are tuned for a smooth demo experience:
+## API endpoints
 
-- `text`: 300 characters
-- `prompt_text`: 300 characters
-- `prompt_audio`: 10 MB
-- `prompt_audio` duration: 30 seconds
+- `GET /health`: hybrid mode, S3 status, worker heartbeat, and sample count
+- `GET /samples`: sample metadata and presigned prompt-audio URLs
+- `POST /jobs`: create an inference job from a `sample_id`
+- `GET /jobs/pending`: worker-only endpoint to claim the next pending job
+- `POST /jobs/{job_id}/result`: worker-only endpoint to publish success or failure
+- `GET /jobs/{job_id}`: job status, cached flag, result key, and result URL when available
 
-You can adjust them with:
+Example job creation:
 
-- `ZIPVOICE_MAX_TEXT_CHARS`
-- `ZIPVOICE_MAX_PROMPT_TEXT_CHARS`
-- `ZIPVOICE_MAX_PROMPT_AUDIO_BYTES`
-- `ZIPVOICE_MAX_PROMPT_AUDIO_SECONDS`
+```bash
+curl -X POST "http://localhost:8000/jobs" \
+  -H "Content-Type: application/json" \
+  -d '{"sample_id":"greeting"}'
+```
 
-## Publishing notes
+## Notes
 
-This deployment is well suited for academic demos, internal showcases, and lightweight inference endpoints. The `/docs` page offers an immediate web interface, while `/examples` gives users ready-made Catalan prompts and optional reference audio assets from S3.
+- Jobs are stored only in memory on the API instance.
+- Sample manifests and cached demo outputs survive restarts because they live in S3.
+- If a sample has a cached output listed in `cached_results_manifest.json`, the API returns it immediately as `served_from_cache`.

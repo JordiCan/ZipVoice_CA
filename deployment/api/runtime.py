@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -48,6 +50,8 @@ DEFAULT_SAMPLE_TEXTS = [
     },
 ]
 DEFAULT_SAMPLE_TEXTS_FILE = Path(__file__).with_name("sample_texts.json")
+DEFAULT_SAMPLES_MANIFEST_FILE = Path("s3_artifacts/examples/samples_manifest.json")
+DEFAULT_CACHED_RESULTS_FILE = Path("s3_artifacts/examples/cached_results_manifest.json")
 
 
 def get_s3_client() -> Optional[BaseClient]:
@@ -68,6 +72,10 @@ def get_s3_client() -> Optional[BaseClient]:
     return session.client("s3", endpoint_url=endpoint_url)
 
 
+def get_s3_bucket() -> Optional[str]:
+    return os.environ.get("ZIPVOICE_S3_BUCKET")
+
+
 def download_s3_file(
     s3_client: BaseClient,
     bucket: str,
@@ -84,8 +92,73 @@ def download_s3_file(
         return False
 
 
+def upload_s3_file(
+    *,
+    file_path: Path,
+    key: str,
+    content_type: str = "audio/wav",
+) -> bool:
+    bucket = get_s3_bucket()
+    s3_client = get_s3_client()
+    if not bucket or s3_client is None:
+        return False
+
+    try:
+        s3_client.upload_file(
+            str(file_path),
+            bucket,
+            key,
+            ExtraArgs={"ContentType": content_type},
+        )
+        logger.info("Uploaded %s to s3://%s/%s", file_path, bucket, key)
+        return True
+    except (BotoCoreError, ClientError):
+        logger.exception("Failed to upload %s to s3://%s/%s", file_path, bucket, key)
+        return False
+
+
+def generate_s3_get_url(key: str, expires_in: Optional[int] = None) -> Optional[str]:
+    bucket = get_s3_bucket()
+    s3_client = get_s3_client()
+    if not bucket or s3_client is None:
+        return None
+    try:
+        return s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": key},
+            ExpiresIn=expires_in
+            or int(os.environ.get("ZIPVOICE_JOB_RESULT_URL_TTL", "3600")),
+        )
+    except (BotoCoreError, ClientError):
+        logger.exception("Failed to generate presigned URL for s3://%s/%s", bucket, key)
+        return None
+
+
+def get_result_download_url(key: str) -> Optional[str]:
+    return generate_s3_get_url(key)
+
+
+def load_json_file(path: Path) -> Any:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_json_from_s3_key(key: str, fallback_path: Optional[Path] = None) -> Any:
+    bucket = get_s3_bucket()
+    s3_client = get_s3_client()
+    if bucket and s3_client is not None:
+        try:
+            response = s3_client.get_object(Bucket=bucket, Key=key)
+            return json.loads(response["Body"].read().decode("utf-8"))
+        except (BotoCoreError, ClientError, json.JSONDecodeError):
+            logger.exception("Failed to load JSON manifest from s3://%s/%s", bucket, key)
+    if fallback_path and fallback_path.is_file():
+        return load_json_file(fallback_path)
+    raise FileNotFoundError(f"Could not load JSON content for key {key}")
+
+
 def list_s3_example_audio() -> list[dict[str, str]]:
-    bucket = os.environ.get("ZIPVOICE_S3_BUCKET")
+    bucket = get_s3_bucket()
     prefix = os.environ.get("ZIPVOICE_S3_EXAMPLES_PREFIX", "").strip("/")
     s3_client = get_s3_client()
     if not bucket or not prefix or s3_client is None:
@@ -95,7 +168,9 @@ def list_s3_example_audio() -> list[dict[str, str]]:
     try:
         response = s3_client.list_objects_v2(Bucket=bucket, Prefix=normalized_prefix)
     except (BotoCoreError, ClientError):
-        logger.exception("Failed to list example objects in s3://%s/%s", bucket, normalized_prefix)
+        logger.exception(
+            "Failed to list example objects in s3://%s/%s", bucket, normalized_prefix
+        )
         return []
 
     examples: list[dict[str, str]] = []
@@ -103,23 +178,10 @@ def list_s3_example_audio() -> list[dict[str, str]]:
         key = item.get("Key", "")
         if not key or key.endswith("/"):
             continue
-        try:
-            url = s3_client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": bucket, "Key": key},
-                ExpiresIn=int(os.environ.get("ZIPVOICE_S3_EXAMPLE_URL_TTL", "3600")),
-            )
-        except (BotoCoreError, ClientError):
-            logger.exception("Failed to generate presigned URL for s3://%s/%s", bucket, key)
-            continue
-
-        examples.append(
-            {
-                "name": Path(key).name,
-                "s3_key": key,
-                "url": url,
-            }
+        url = generate_s3_get_url(
+            key, expires_in=int(os.environ.get("ZIPVOICE_S3_EXAMPLE_URL_TTL", "3600"))
         )
+        examples.append({"name": Path(key).name, "s3_key": key, "url": url})
 
     return examples
 
@@ -132,7 +194,7 @@ def prepare_sample_texts_file(runtime_dir: Path) -> Optional[Path]:
             return sample_path
         logger.warning("Sample texts file %s does not exist", sample_path)
 
-    s3_bucket = os.environ.get("ZIPVOICE_S3_BUCKET")
+    s3_bucket = get_s3_bucket()
     s3_key = os.environ.get("ZIPVOICE_S3_SAMPLE_TEXTS_KEY")
     s3_client = get_s3_client()
     if s3_bucket and s3_key and s3_client is not None:
@@ -156,21 +218,108 @@ def load_sample_texts(runtime_dir: Path) -> list[dict[str, str]]:
     if sample_file is None:
         return DEFAULT_SAMPLE_TEXTS
 
-    path = str(sample_file)
-    if not path:
-        return DEFAULT_SAMPLE_TEXTS
-
-    sample_path = Path(path)
-    if not sample_path.is_file():
-        logger.warning("Sample texts file %s does not exist, using defaults", sample_path)
-        return DEFAULT_SAMPLE_TEXTS
-
-    with open(sample_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
+    data = load_json_file(sample_file)
     if not isinstance(data, list):
         raise ValueError("ZIPVOICE_SAMPLE_TEXTS_FILE must contain a JSON list")
     return data
+
+
+def _fallback_samples_manifest() -> list[dict[str, Any]]:
+    examples = list_s3_example_audio()
+    by_name = {Path(item["name"]).stem: item for item in examples}
+    samples = []
+    for sample in DEFAULT_SAMPLE_TEXTS:
+        example_audio = by_name.get(sample["id"])
+        payload = dict(sample)
+        if example_audio:
+            payload["prompt_audio_s3_key"] = example_audio.get("s3_key")
+            payload["prompt_audio_url"] = example_audio.get("url")
+            payload["prompt_audio_name"] = example_audio.get("name")
+        samples.append(payload)
+    return samples
+
+
+def load_samples_manifest() -> list[dict[str, Any]]:
+    manifest_key = os.environ.get("ZIPVOICE_S3_SAMPLES_MANIFEST_KEY")
+    if manifest_key:
+        data = load_json_from_s3_key(
+            manifest_key,
+            fallback_path=DEFAULT_SAMPLES_MANIFEST_FILE,
+        )
+    elif DEFAULT_SAMPLES_MANIFEST_FILE.is_file():
+        data = load_json_file(DEFAULT_SAMPLES_MANIFEST_FILE)
+    else:
+        data = _fallback_samples_manifest()
+
+    if not isinstance(data, list):
+        raise ValueError("Samples manifest must contain a JSON list")
+
+    samples: list[dict[str, Any]] = []
+    for item in data:
+        samples.append(enrich_sample_urls(dict(item)))
+    return samples
+
+
+def load_cached_results_manifest() -> dict[str, dict[str, Any]]:
+    manifest_key = os.environ.get("ZIPVOICE_S3_CACHED_RESULTS_MANIFEST_KEY")
+    if manifest_key:
+        data = load_json_from_s3_key(
+            manifest_key,
+            fallback_path=DEFAULT_CACHED_RESULTS_FILE,
+        )
+    elif DEFAULT_CACHED_RESULTS_FILE.is_file():
+        data = load_json_file(DEFAULT_CACHED_RESULTS_FILE)
+    else:
+        data = []
+
+    if not isinstance(data, list):
+        raise ValueError("Cached results manifest must contain a JSON list")
+
+    result: dict[str, dict[str, Any]] = {}
+    for item in data:
+        sample_id = item.get("sample_id")
+        if not sample_id:
+            continue
+        result[sample_id] = enrich_cached_result(dict(item))
+    return result
+
+
+def enrich_sample_urls(sample: dict[str, Any]) -> dict[str, Any]:
+    key = sample.get("prompt_audio_s3_key")
+    if key:
+        sample["prompt_audio_url"] = generate_s3_get_url(
+            key,
+            expires_in=int(os.environ.get("ZIPVOICE_S3_EXAMPLE_URL_TTL", "3600")),
+        )
+    return sample
+
+
+def enrich_cached_result(entry: dict[str, Any]) -> dict[str, Any]:
+    key = entry.get("result_s3_key")
+    if key:
+        entry["result_url"] = get_result_download_url(key)
+    return entry
+
+
+def get_sample_by_id(
+    samples_by_id: dict[str, dict[str, Any]],
+    sample_id: str,
+) -> Optional[dict[str, Any]]:
+    sample = samples_by_id.get(sample_id)
+    if sample is None:
+        return None
+    return enrich_sample_urls(dict(sample))
+
+
+def get_cached_result_for_sample(
+    *,
+    cached_results: dict[str, dict[str, Any]],
+    sample: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    cached = cached_results.get(sample["id"])
+    if cached is None:
+        return None
+    return enrich_cached_result(dict(cached))
 
 
 def detect_device() -> torch.device:
@@ -183,7 +332,7 @@ def detect_device() -> torch.device:
 
 def ensure_model_artifacts(runtime_dir: Path) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    s3_bucket = os.environ.get("ZIPVOICE_S3_BUCKET")
+    s3_bucket = get_s3_bucket()
     s3_client = get_s3_client()
     s3_downloads = {
         "zipvoice_ca.pt": os.environ.get("ZIPVOICE_S3_CHECKPOINT_KEY"),
