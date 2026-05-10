@@ -1,0 +1,14 @@
+[
+  {
+    "id": "greeting",
+    "label": "Short greeting",
+    "text": "Bon dia, com estàs?",
+    "prompt_text": "Això és una prova de veu."
+  },
+  {
+    "id": "assistant",
+    "label": "Virtual assistant",
+    "text": "La teva comanda s'ha processat correctament i ja està en camí.",
+    "prompt_text": "Parlo amb un to proper i tranquil."
+  }
+]

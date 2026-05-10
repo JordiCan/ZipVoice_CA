@@ -28,6 +28,7 @@ The reported metrics are intended as indicative benchmarks under this repository
 ```text
 .
 ├── create_dataset.py              # Builds Catalan train/dev/test TSV files
+├── deployment/                    # FastAPI + Docker deployment for demo inference
 ├── egs/zipvoice/run_finetune.sh   # Fine-tuning and inference recipe
 ├── eval/run_eval.sh               # Evaluation pipeline
 ├── requirements_zipvoice.txt      # Main ZipVoice environment requirements
@@ -207,6 +208,55 @@ export UTMOS_DIR=/path/to/UTMOS-demo
 Replace `finetune_eden_5e-4` with the experiment directory you want to evaluate.
 
 The evaluation script computes speaker similarity, WER/CER, and UTMOS scores for the generated samples.
+
+---
+
+## Deployment
+
+This repository also includes a publishable inference deployment based on FastAPI, Docker, EC2, and S3-backed model assets.
+
+- Docker image: [deployment/Dockerfile](/root/ZipVoice_CA/deployment/Dockerfile)
+- API app: [deployment/api/main.py](/root/ZipVoice_CA/deployment/api/main.py)
+- AWS docs: [deployment/aws/README.md](/root/ZipVoice_CA/deployment/aws/README.md)
+- AWS Academy guide: [deployment/aws/AWS_ACADEMY_GUIDE.md](/root/ZipVoice_CA/deployment/aws/AWS_ACADEMY_GUIDE.md)
+
+Deployment highlights:
+
+- one EC2 instance
+- one Docker container
+- Swagger UI at `/docs` as the demo web interface
+- S3-backed checkpoint and optional demo assets
+- `/examples` endpoint with sample texts and optional reference audio links
+
+Quick local run:
+
+```bash
+docker build -f deployment/Dockerfile -t zipvoice-api .
+docker volume create zipvoice-model-cache
+export ZIPVOICE_S3_BUCKET=your-bucket
+export ZIPVOICE_S3_CHECKPOINT_KEY=zipvoice-ca/models/zipvoice_ca.pt
+docker run --rm \
+  -p 8000:8000 \
+  -e ZIPVOICE_MODEL_DIR=/app/models/zipvoice_ca_runtime \
+  -e ZIPVOICE_S3_BUCKET="$ZIPVOICE_S3_BUCKET" \
+  -e ZIPVOICE_S3_CHECKPOINT_KEY="$ZIPVOICE_S3_CHECKPOINT_KEY" \
+  -v zipvoice-model-cache:/app/models/zipvoice_ca_runtime \
+  zipvoice-api
+```
+
+Then open:
+
+```text
+http://localhost:8000/docs
+```
+
+The API exposes:
+
+- `GET /health`
+- `GET /examples`
+- `POST /synthesize`
+
+The full deployment guide, including the recommended S3 layout and EC2 setup, is available in [deployment/aws/README.md](/root/ZipVoice_CA/deployment/aws/README.md).
 
 ---
 
