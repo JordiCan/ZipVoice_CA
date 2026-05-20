@@ -212,3 +212,6 @@ audios/
 models/
 *.pem
 deployment/frontend/node_modules/
+
+# Auxiliar
+slides/

@@ -5,7 +5,6 @@ import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-import torchaudio
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -205,6 +204,36 @@ def persist_upload(upload: UploadFile, suffix: str) -> str:
 
 def validate_audio_duration(path: str, *, max_seconds: float) -> None:
     try:
+        completed = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        duration_seconds = float(completed.stdout.strip())
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="prompt_audio could not be decoded as a valid audio file.",
+        ) from exc
+
+    if duration_seconds > max_seconds:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "prompt_audio is too long. "
+                f"Maximum duration is {max_seconds:g} seconds."
+            ),
+        )    try:
         waveform, sample_rate = torchaudio.load(path)
     except Exception as exc:
         raise HTTPException(
